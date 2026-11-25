@@ -189,9 +189,63 @@ Android 対応をどの段階で始めるかは未決定(7 章を参照)。
 | 端末内 DB に Diesel を使う | 型で検査されるクエリは安全だが、Rust を学び始めたばかりの段階では型エラーが読み解きにくい |
 | 端末内 DB に SQLx を使う | 非同期処理が前提のサーバー向けの作りで、端末内 DB には重い |
 
+### リポジトリ構成
+
+```
+habloom/
+├── Cargo.toml            # Cargo workspace の定義
+├── Cargo.lock
+├── .cargo/config.toml    # `cargo xtask` で xtask を呼び出す別名を定義する
+├── core/                 # 共通コア(crate 名は habloom-core)
+├── xtask/                # ビルド手順(バインディング生成、XCFramework の作成)
+├── ios/
+│   ├── Habloom.xcodeproj
+│   ├── Habloom/          # SwiftUI のアプリ本体
+│   └── HabloomCore/      # ローカル Swift パッケージ。共通コアを Swift から使えるようにする
+├── android/              # Android 対応を始めるときに追加する
+├── server/               # 第 2 段階で追加する(同期 API)
+└── docs/
+```
+
+#### Rust のコード
+
+- リポジトリのルートを Cargo workspace とし、`core/` と `xtask/` をその中の crate として置く。第 2 段階の同期 API は `server/` として同じ workspace に加える。
+- workspace にすると、依存ライブラリの版が `Cargo.lock` 1 つで揃い、ビルド結果の `target/` も共有できる。
+
+#### ビルド手順
+
+共通コアを iOS アプリから使うには、次の工程が必要になる。
+
+1. 共通コアを、実機用(`aarch64-apple-ios`)とシミュレーター用(`aarch64-apple-ios-sim`)の静的ライブラリとしてビルドする。
+2. UniFFI で、Swift から呼ぶためのコード(Swift のソースと、C の宣言であるヘッダーとモジュールマップ)を生成する。
+3. 1 の 2 つのライブラリと 2 の C の宣言を、XCFramework(Apple の配布形式。Xcode がビルド先に合ったライブラリを選ぶ)にまとめる。
+4. 3 と 2 の Swift のソースを `ios/HabloomCore/` に置く。
+
+- 1〜4 は `xtask/` に Rust で書き、`cargo xtask` で実行する。
+- 2〜4 の生成物は Git に含めない(`.gitignore` に入れる)。clone した後と共通コアを変更した後は、Xcode でビルドする前に `cargo xtask` を実行する。
+- XCFramework は SQLite を同梱して数十 MB になる見込みで、変更のたびにコミットすると履歴が膨らむ。生成し忘れによる食い違いも防ぐ。
+
+#### iOS アプリへの組み込み
+
+- `ios/HabloomCore/` をローカルの Swift パッケージ(Swift Package Manager のパッケージ)とし、XCFramework と生成した Swift のソースをその中に置く。
+- アプリ(`ios/Habloom/`)はこのパッケージに依存し、`import HabloomCore` で共通コアを使う。
+- `Package.swift` は Git に含める。生成物とアプリのコードを分け、組み込みの設定をテキストで読める形にするため。
+
+#### 検討して採用しなかった案
+
+| 案 | 採用しなかった理由 |
+|---|---|
+| Rust のコードを `rust/` の下にまとめる | 見た目は整理されるが、cargo のコマンドを毎回 `rust/` で実行する必要があり、Rust では少数派 |
+| `core/` を単独の crate にする | 最初の設定は最も少ないが、`server/` を足すときに workspace への作り替えが必要になる |
+| ビルド手順をシェルスクリプトで書く | 手順は読みやすいが、Rust の練習にならない。Android 用の手順を足すときも、同じ仕組みでまとめられる xtask の方が扱いやすい |
+| cargo-swift でビルドから Swift パッケージ化までを一括で行う | 中で何をしているかが見えず、つまずいたときに原因を追いにくい。Android には使えない |
+| 生成物を Git に含める | Rust の環境がなくてもビルドできるが、一人で開発する間は利点が小さく、履歴が膨らむ |
+| XCFramework と生成コードを Xcode プロジェクトに直接追加する | 生成物とアプリのコードが混ざる。設定が Xcode の画面操作になり、`project.pbxproj` の差分も読みにくい |
+
 ### 学習の進め方
 
 - Rust、Swift、Kotlin はいずれも初めて学ぶ。実装では、使った言語機能とその言語らしい書き方、他の言語との違いを説明しながら進める。
+- 言語間の連携(UniFFI による Rust と Swift / Kotlin の接続)と、スマホアプリの開発も初めてになる。ビルドの仕組みや用語は、初めて出たときに説明しながら進める。
 - 最初の山は、Rust を iOS と Android 向けにビルドして組み込む設定(XCFramework、NDK)になる見込み。
 
 ## 7. 未決定事項
